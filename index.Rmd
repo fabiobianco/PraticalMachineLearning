@@ -1,0 +1,195 @@
+---
+title: "pratical-machine-learning-project"
+author: "Fabio Bianchini"
+date: "4/12/2020"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+library(rattle)
+library(kernlab)
+library(ISLR)
+library(ggplot2)
+library(caret)
+library(Hmisc)
+library(tidyverse)
+library(corrplot)
+library(dplyr)
+```
+
+##### Read Human Activity Recognition - HAR - training and test dataset
+
+```{r}
+# Read training dataset
+HAR_training <- read.csv(file="https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", header=TRUE,sep=",")
+dim(HAR_training)
+# Read test dataset
+HAR_testing <- read.csv(file="https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", header=TRUE,sep=",")
+dim(HAR_testing)
+```
+
+##### Determine the data types of a data frame's columns
+Now let's do an exploratory analysis of the datasets to verify the content and type of predictor variables present
+
+```{r}
+#
+data_types <- function(frame) {
+  res <- lapply(frame, class)
+  res_frame <- data.frame(unlist(res))
+#  View(res_frame)
+  dataset_name <- deparse(substitute(frame))
+  barplot(table(res_frame), main=c("Data types for ", dataset_name), col="steelblue", ylab="Number of Features")
+}
+#par(mfrow=c(2,1))
+data_types(HAR_training)
+table(unlist(lapply(HAR_training, class)))
+#
+data_types(HAR_testing)
+table(unlist(lapply(HAR_testing, class)))
+#
+```
+
+##### Cleaning the input data
+Now let's clean up and rearrange the datasets
+
+```{r}
+all_na <- function(x) any(is.na(x))
+# We remove the variables that contains missing value
+train_col_na <- HAR_training %>% select_if(all_na)
+# remove from training dataset
+new_train <-select(HAR_training, -c(names(train_col_na)))
+dim(new_train)
+# remove from testing dataset
+test_col_na <- HAR_testing %>% select_if(all_na)
+new_test <- select(HAR_testing, -c(names(test_col_na)))
+dim(new_test)
+```
+
+... and remove the first seven variables as they have little impact on the outcome "*classe*"
+
+```{r}
+View(HAR_training[1:5, c(1:7)])
+new_train <- new_train[, -c(1:7)]
+dim(new_train)
+View(HAR_testing[1:5, c(1:7)])
+new_test <- new_test[, -c(1:7)]
+dim(new_test)
+```
+
+##### Data preparation for Prediction
+
+now split the traning data...
+
+```{r}
+set.seed(1234) 
+inTrain <- createDataPartition(new_train$classe, p = 0.7, list = FALSE)
+# Create the training dataset
+ds_training <- new_train[inTrain, ]
+dim(ds_training)
+# Create the validation dataset
+ds_validation <- new_train[-inTrain, ]
+dim(ds_validation)
+```
+
+Remove the "*near zero-variance predictor*" from the datasets
+
+```{r}
+nzv <- nearZeroVar(ds_training) 
+ds_training <- ds_training[,-nzv]
+dim(ds_training)
+ds_validation <- ds_validation[,-nzv]
+dim(ds_validation)
+```
+
+and *minimize the multicollateral effect* by removing the redundant features
+
+```{r}
+### Compute the correlation matrix of the predictor
+# Remove factor variable from HAR_training dataset
+descrCorr <- cor(ds_training[,-53], use = "pairwise.complete.obs")
+# Show correlation matrix
+corr_image <- corrplot(descrCorr, tl.col = "black",  method = "color",tl.cex = 0.6, type = "upper", order = "hclust")
+# find attributes that are highly corrected 
+highCorr <- findCorrelation(descrCorr,cutoff =  0.75)
+names(ds_training)[highCorr]
+# Remove the high correlate colon from the training dataset
+ds_training <- ds_training[,-highCorr]
+dim(ds_training)
+ds_validation <- ds_validation[,-highCorr]
+dim(ds_validation)
+```
+
+#### Building and tuning models
+
+We will apply this classification Models to the traning dataset
+
++ KNN Model
++ SVM Model
++ Random Forest Model
+
+##### K-nearest neighbors Model
+
+```{r, model_knn}
+set.seed(1234)
+trainCtrl_knn <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+modelfit_knn <- train(classe ~ ., data = ds_training, method="knn", trControl = trainCtrl_knn)
+#
+modelfit_knn
+resampleHist((modelfit_knn))
+plot(modelfit_knn)
+#
+predict_knn <- predict(modelfit_knn, newdata = ds_validation, na.action = na.pass)
+#
+cm_knn <- confusionMatrix(predict_knn, ds_validation$classe)
+cm_knn
+
+```
+
+We see that the accuracy rate of the model is  *Accuracy: 0.8654* and therefore *the out-of-sample-error is about 0.1346*. 
+
+##### SVM Model
+
+```{r warning=FALSE}
+set.seed(1234)
+trainCtrl_svm <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+modelfit_svm <- train(classe ~ ., data = ds_training, method="svmRadial", trControl = trainCtrl_svm, preProcess = c("center","scale"), tuneLength = 10)
+# tuneGrid = expand.grid(C = seq(0.1, 2, length = 20))
+modelfit_svm
+resampleHist((modelfit_svm))
+plot(modelfit_svm)
+#
+predict_svm <- predict(modelfit_svm, newdata = ds_validation, na.action = na.pass)
+#
+cm_svm <- confusionMatrix(predict_svm, ds_validation$classe)
+cm_svm
+```
+
+We see that the accuracy rate of the model is  *Accuracy: 0.9898* and therefore *the out-of-sample-error is about 0.0102*.
+
+##### Prediction with Random Forest method
+```{r}
+set.seed(12345)
+trainCtrl <- trainControl(method = "cv", number = 5, verboseIter = FALSE)
+modelfit_rf <- train(classe ~ ., data = ds_training, method="rf", trControl = trainCtrl)
+modelfit_rf
+resampleHist((modelfit_rf))
+#
+predict_rf <- predict(modelfit_rf, newdata = ds_validation, na.action = na.pass)
+#
+cm_rf <- confusionMatrix(predict_rf, ds_validation$classe)
+cm_rf
+```
+
+The accuracy rate using the random forest is very high: *Accuracy : 0.9929* and therefore the *out-of-sample-error is equal to 0.0071*
+
+##### Do predictions with the and compare the models
+the random forest model is the one with the best accuracy and therefore will be used to predict the new values
+
+```{r}
+Results_rt <- predict(modelfit_rf, newdata=new_test)
+Results_rt
+```
